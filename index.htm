@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Visualisation of voltage harmonics</title>
+        <link type="text/css" href="css/vader/jquery-ui-1.10.3.custom.css" rel="Stylesheet" />
+        <meta charset="utf-8">
+        <noscript>
+        This page requires JavaScript.
+        </noscript>
+        <script type="text/javascript">
+            var _gaq = _gaq || [];
+            _gaq.push(['_setAccount', 'UA-21122920-1']);
+            _gaq.push(['_trackPageview']);
+
+            (function() {
+                var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+                ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+                var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+            })();
+        </script>
+        <script src="js/processing-1.4.1.min.js"></script>
+        <script src="js/jquery-2.0.3.min.js"></script>
+        <script src="js/jquery-ui-1.10.3.custom.min.js"></script>
+        <script src="js/jquery.mousewheel.js"></script>
+        <script type="text/javascript">
+        /**
+         * Visualisation of voltage harmonics
+         *
+         * Copyright (c) 2013 Steven Blair
+         *
+         * Permission is hereby granted, free of charge, to any person obtaining a copy
+         * of this software and associated documentation files (the "Software"), to deal
+         * in the Software without restriction, including without limitation the rights
+         * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+         * copies of the Software, and to permit persons to whom the Software is
+         * furnished to do so, subject to the following conditions:
+         *
+         * The above copyright notice and this permission notice shall be included in
+         * all copies or substantial portions of the Software.
+         *
+         * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+         * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+         * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+         * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+         * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+         * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+         * THE SOFTWARE.
+         */
+
+        Processing = {};
+        Processing.data = {};
+        resetData();
+        
+        function sign(delta) {
+            if (delta > 0) {
+                return 1;
+            }
+            else if (delta < 0) {
+                return -1;
+            }
+            else {
+                return 0;
+            }
+        }
+
+        function ordinalSuffix(i) {
+            var j = i % 10;
+            if (j == 1 && i != 11) {
+                return "st";
+            }
+            if (j == 2 && i != 12) {
+                return "nd";
+            }
+            if (j == 3 && i != 13) {
+                return "rd";
+            }
+            return "th";
+        }
+
+        function mouseWheelFunction(event, delta, deltaX, deltaY) {
+            var element = $(this);
+            var value = element.slider('option', 'value');
+            var step = element.slider('option', 'step');
+            var min = element.slider('option', 'min');
+            var max = element.slider('option', 'max');
+
+            var id = parseInt(element.attr('id').split('-').slice(-1)[0]);
+
+            // if slider deals with non-integer values, increase step size
+            if (!isNaN(id) && Processing.data.harmonics[id].interharmonic) {
+                step = 0.5;
+            }
+            else if (element.attr('id') == "simulation-time") {
+                // do not alter step size
+            }
+            else if (step < 1.0) {
+                step = (max - min) / (100.0 / Processing.data.SCROLL_PERCENT);
+            }
+
+            var newValue = value + step * sign(delta);
+
+            if (newValue < min) {
+                newValue = min;
+            }
+
+            if (newValue > max) {
+                newValue = max;
+            }
+
+            element.slider("option", "value", newValue);
+            element.slider("option", "slide").call(element, null, { value: newValue });
+
+            Processing.data.change = true;
+
+            return false;
+        }
+
+        $(function() {
+            $("#add-harmonic-button").button().click(function() {
+                addHarmonic({
+                    freq: 350.0, mag : 0.1, phase: 0.0, sequence: Processing.data.SEQ.POS, interharmonic: false
+                });
+
+                addHarmonicPanel(Processing.data.harmonicIndex - 1, true);
+                updateLabels();
+                setAllSliders();
+
+                Processing.data.change = true;
+            });
+
+            $("#add-interharmonic-button").button().click(function() {
+                addHarmonic({
+                    freq: 40.0, mag : 0.1, phase: 0.0, sequence: Processing.data.SEQ.POS, interharmonic: true
+                });
+
+                addHarmonicPanel(Processing.data.harmonicIndex - 1, true);
+                updateLabels();
+                setAllSliders();
+
+                Processing.data.change = true;
+            });
+
+            $("#source-impedance").slider({
+                value: Processing.data.sourceImpedance,
+                range: "min",
+                min: 0.00,
+                max: 1.0,
+                step: 0.01,
+                orientation: "horizontal",
+                slide: function(event, ui) {
+                    Processing.data.sourceImpedance = ui.value;
+                    Processing.data.change = true;
+                }
+            });
+
+            $("#simulation-time").slider({
+                value: Processing.data.simulationTime,
+                range: "min",
+                min: 0.02,
+                max: 1.0,
+                step: 0.01,
+                orientation: "horizontal",
+                slide: function(event, ui) {
+                    Processing.data.simulationTime = ui.value;
+                    Processing.data.change = true;
+                }
+            });
+
+            $("#reset-button").button().click(function() {
+                reset();
+            });
+
+            $("#six-pulse-button").button().click(function() {
+                reset(HarmonicsSixPulse);
+            });
+            $("#twelve-pulse-button").button().click(function() {
+                reset(HarmonicsTwelvePulse);
+            });
+            $("#twentyfour-pulse-button").button().click(function() {
+                reset(HarmonicsTwentyFourPulse);
+            });
+
+            $("#variable-speed-drive").button().click(function() {
+                reset(HarmonicsVSD);
+            });
+            $("#TCR-button").button().click(function() {
+                reset(HarmonicsTCR);
+            });
+            
+            $("#cfl-button").button().click(function() {
+                reset(HarmonicsCFL, 1);
+            });
+            $("#led-button").button().click(function() {
+                reset(HarmonicsLED, 1);
+            });
+            $("#dc-supply-button").button().click(function() {
+                reset(HarmonicsDCSupply, 1);
+            });
+            $("#arc-furnace-button").button().click(function() {
+                reset(HarmonicsArcFurnace, 1, 1.0, false);
+            });
+            $("#apartment-button").button().click(function() {
+                reset(HarmonicsApartment, 1);
+            });
+            $("#switched-mode-button").button().click(function() {
+                reset(HarmonicsSwitchedMode, 1);
+            });
+            $("#PWM-drive-button").button().click(function() {
+                reset(HarmonicsPWMDrive);
+            });
+
+            $("#low-pf-lighting").button().click(function() {
+                reset(HarmonicsLowPFLighting, 1);
+            });
+            $("#ev-chargers").button().click(function() {
+                reset(HarmonicsEVChargers, 1);
+            });
+            $("#modern-entertainment").button().click(function() {
+                reset(HarmonicsModernEntertainment, 1);
+            });
+            $("#hvac").button().click(function() {
+                reset(HarmonicsHVAC, 1);
+            });
+
+            $("#square-button").button().click(function() {
+                reset(HarmonicsSquare, 1);
+            });
+            $("#sawtooth-button").button().click(function() {
+                reset(HarmonicsSawtooth, 1);
+            });
+
+            $("#info-button").button();
+
+            $("#no-of-phases").buttonset().click(function() {
+                if ($("#three-phase").is(":checked")) {
+                    Processing.data.phases = 3;
+                }
+                else if ($("#single-phase").is(":checked")) {
+                    Processing.data.phases = 1;
+                }
+
+                Processing.data.change = true;
+            });
+
+            $("#z-type").buttonset().click(function() {
+                if ($("#z-type-r").is(":checked")) {
+                    Processing.data.zType = 0;
+                }
+                else if ($("#z-type-x").is(":checked")) {
+                    Processing.data.zType = 1;
+                }
+
+                Processing.data.change = true;
+            });
+
+            $("#show-power").button().click(function() {
+                if ($("#show-power").is(":checked")) {
+                    Processing.data.showPower = true;
+                }
+                else {
+                    Processing.data.showPower = false;
+                }
+
+                Processing.data.change = true;
+            });
+            $("#info-button").mouseenter(function() {
+                var leftPos = $("#info-button").width() + $("#info-button").offset().left + 15;
+                var topPos = $("#info-button").offset().top;
+                $("#info").css({"left" : leftPos + "px", "top" : topPos + "px"});
+                $("#info").fadeIn();
+            });
+
+            $("#info").mouseenter(function() {
+                $("#info").stop(true);
+                $("#info").fadeTo(50, 1.0);
+            });
+
+            $("#info, #info-button").mouseleave(function() {
+                $("#info").fadeOut();
+            });
+
+            $(".ui-slider").mousewheel(mouseWheelFunction);
+        });
+
+
+        function updateLabels() {
+            $("#source-impedance-label").html("source impedance: " + (Processing.data.sourceImpedance).toFixed(2) + " pu");
+            $("#simulation-time-label").html("simulation time: " + (Processing.data.simulationTime).toFixed(2) + " s");
+
+            for (h in Processing.data.harmonics) {
+                var f = Processing.data.harmonics[h].freq;
+                var num = f / 50.0;
+                $("#harmonic-number-" + h).slider("value", f);
+                $("#harmonic-number-label-" + h).html("<span class='harmonic-number-label-left'><b style='font-style: bold;'>" + num + "<sup>" + ordinalSuffix(num) + "</sup></b> harmonic</span><span>" + f + " Hz</span>");
+                $("#harmonic-mag-phase-label-" + h).html((Processing.data.harmonics[h].mag).toFixed(2) + " pu &#8736; " + (Processing.data.harmonics[h].phase).toFixed(2) + "&deg;");
+                $("#harmonic-mag-bar-" + h).width(100.0 * Processing.data.harmonics[h].mag + '%');
+            }
+        }
+
+        function getSeqElements(id) {
+            return $("#harmonic-mag-" + id + " .ui-slider-range, #harmonic-phase-" + id + " .ui-slider-range, #harmonic-number-" + id + " .ui-slider-range, #harmonic-mag-bar-" + id);
+        }
+
+        function setZeroColour(id) {
+            getSeqElements(id).removeClass("posColour").removeClass("negColour").addClass("zeroColour");
+        }
+
+        function setPosColour(id) {
+            getSeqElements(id).removeClass("zeroColour").removeClass("negColour").addClass("posColour");
+        }
+
+        function setNegColour(id) {
+            getSeqElements(id).removeClass("zeroColour").removeClass("posColour").addClass("negColour");
+        }
+
+        function setHarmonicSeq(id) {
+            // set the harmonic sequence to the normal setting for this harmonic number
+            // interharmonics default to positive sequence
+            if (Processing.data.harmonics[id].interharmonic == false) {
+                modulus = (Processing.data.harmonics[id].freq / 50) % 3;
+                Processing.data.harmonics[id].sequence = modulus;
+            }
+        }
+
+        function setAllSliders() {
+            $("#source-impedance").slider("value", Processing.data.sourceImpedance);
+            $("#simulation-time").slider("value", Processing.data.simulationTime);
+
+            if (Processing.data.phases == 3) {
+                $("#three-phase").prop('checked', true).button("refresh");
+            }
+            else if (Processing.data.phases == 1) {
+                $("#single-phase").prop('checked', true).button("refresh");
+            }
+
+            if (Processing.data.zType == 1) {
+                $("#z-type-x").prop('checked', true).button("refresh");
+            }
+            else {
+                $("#z-type-r").prop('checked', true).button("refresh");
+            }
+
+            for (h in Processing.data.harmonics) {
+                $("#harmonic-number-" + h).slider("value", Processing.data.harmonics[h].freq);
+                $("#harmonic-mag-" + h).slider("value", Processing.data.harmonics[h].mag);
+                $("#harmonic-phase-" + h).slider("value", Processing.data.harmonics[h].phase);
+
+                if (Processing.data.harmonics[h].sequence == 0) {
+                    $("#zero-" + h).prop('checked', true).button("refresh");
+                    setZeroColour(h);
+                }
+                else if (Processing.data.harmonics[h].sequence == 1) {
+                    $("#pos-" + h).prop('checked', true).button("refresh");
+                    setPosColour(h);
+                }
+                else if (Processing.data.harmonics[h].sequence == 2) {
+                    $("#neg-" + h).prop('checked', true).button("refresh");
+                    setNegColour(h);
+                }
+            }
+
+            // updateLabels();
+
+            Processing.data.change = true;
+        }
+
+        function addHarmonicPanel(h, allowEditing) {
+            $('body').append('\
+                <div class="toolbar ui-widget-content ui-corner-all harmonic" id="harmonic-' + h + '">\
+                    <div class="controls" id="harmonic-number-control-' + h + '" title="harmonic number">\
+                        <div class="label" id="harmonic-number-label-' + h + '"></div>\
+                        <span class="horizontal" id="harmonic-number-' + h + '"></span>\
+                    </div>\
+                    <div class="harmonic-mag-bar" id="harmonic-mag-bar-' + h + '"></div>\
+                    <div class="controls" id="harmonic-mag-phase-' + h + '" title="harmonic magnitude and angle">\
+                        <div class="label mag-phase-label" id="harmonic-mag-phase-label-' + h + '"></div>\
+                        <span class="vertical" id="harmonic-mag-' + h + '"></span>\
+                        <span class="horizontal" id="harmonic-phase-' + h + '"></span>\
+                    </div>\
+                    <div id="harmonic-seq-' + h + '" title="sequence of harmonic">\
+                        <input type="radio" id="pos-' + h + '" name="harmonic-seq-radio-' + h + '" checked="checked" /><label for="pos-' + h + '" title="">pos</label>\
+                        <input type="radio" id="neg-' + h + '" name="harmonic-seq-radio-' + h + '" /><label for="neg-' + h + '" title="">neg</label>\
+                        <input type="radio" id="zero-' + h + '" name="harmonic-seq-radio-' + h + '" /><label for="zero-' + h + '" title="">zero</label>\
+                    </div>\
+                </div>'
+            );
+
+            var freqStep = 50.0;
+            var freqMin = 50.0;
+            var freqMax = 2000.0;
+            if (Processing.data.harmonics[h].interharmonic) {
+                freqStep = 0.5;
+                freqMin = 1.0;
+                freqMax = 1000.0;
+            }
+
+            $("#harmonic-number-" + h).slider({
+                value: Processing.data.harmonics[h].freq,
+                range: "min",
+                min: freqMin,
+                max: freqMax,
+                step: freqStep,
+                orientation: "horizontal",
+                slide: function(event, ui) {
+                    var id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                    Processing.data.harmonics[id].freq = ui.value;
+                    
+                    setHarmonicSeq(id);
+                    setAllSliders();
+                }
+            });
+            $("#harmonic-seq-" + h).buttonset();
+            $("#harmonic-mag-" + h).slider({
+                value: Processing.data.harmonics[h].mag,
+                range: "min",
+                min: 0.0,
+                max: 1.0,
+                step: 0.01,
+                orientation: "vertical",
+                slide: function(event, ui) {
+                    var id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                    Processing.data.harmonics[id].mag = ui.value;
+                }
+            });
+            $("#harmonic-phase-" + h).slider({
+                value: Processing.data.harmonics[h].phase,
+                range: "min",
+                min: -180.0,
+                max: 180.0,
+                step: 10.0,
+                orientation: "horizontal",
+                slide: function(event, ui) {
+                    var id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                    Processing.data.harmonics[id].phase = ui.value;
+                }
+            });
+
+            $("#harmonic-seq-" + h).click(function() {
+                if ($("#pos-" + h).is(":checked")) {
+                    Processing.data.harmonics[h].sequence = 1;
+                    setPosColour(h);
+                }
+                else if ($("#neg-" + h).is(":checked")) {
+                    Processing.data.harmonics[h].sequence = 2;
+                    setNegColour(h);
+                }
+                else if ($("#zero-" + h).is(":checked")) {
+                    Processing.data.harmonics[h].sequence = 0;
+                    setZeroColour(h);
+                }
+
+                Processing.data.change = true;
+            });
+
+
+            if (allowEditing) {
+                $("#harmonic-" + h + " .ui-slider").each(function() {
+                    $(this).bind("slide", function(event, ui) {
+                        Processing.data.change = true;
+                    })
+                });
+
+                $(".harmonic").each(function() {
+                    $(this).bind("mouseenter", function(event, ui) {
+                        var id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                        Processing.data.highlighted = id;
+                        $(this).find('.ui-slider, .ui-buttonset, .mag-phase-label').stop().slideDown('fast');
+                        $(this).find('.harmonic-mag-bar').hide();
+                        Processing.data.change = true;
+                    })
+                    $(this).bind("mouseleave", function(event, ui) {
+                        Processing.data.highlighted = -1;
+                        $(this).find('.ui-slider, .ui-buttonset, .mag-phase-label').stop().slideUp('fast');
+                        $(this).find('.harmonic-mag-bar').show();
+                        Processing.data.change = true;
+                    })
+                });
+
+                $("#harmonic-" + h + " .ui-slider").mousewheel(mouseWheelFunction);
+
+                // $("#remove-harmonic-button-" + h).button().click(function() {
+                //     id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                //     removeHarmonic(id);
+                // });
+
+                $('#harmonic-' + h).fadeIn("fast");
+            }
+
+            // allow harmonics to be removed by double click
+            $("#harmonic-" + h).dblclick(function() {
+                // $(this).find("#remove-harmonic-button-" + h).click();
+                id = parseInt($(this).attr('id').split('-').slice(-1)[0]);
+                removeHarmonic(id);
+                return false;
+            });
+
+            // setAllSliders();
+        }
+
+        function removeHarmonic(id) {
+            $("#harmonic-" + id).slideUp('fast', function() {
+                $(this).remove();
+                Processing.data.change = true;
+            });
+
+            Processing.data.highlighted = -1;       // ensure highlighted harmonic is cleared
+            delete Processing.data.harmonics[id];   // delete the data
+        }
+
+        // TODO combine with addHarmonicPanel()?
+        function addHarmonic(h) {
+            Processing.data.harmonics[Processing.data.harmonicIndex] = h;
+            Processing.data.harmonicIndex++;
+        }
+
+        function resetData(initialData, phases, simulationTime, allowEditing) {
+            if (phases == undefined) {
+                phases = 3;
+            }
+
+            if (simulationTime == undefined) {
+                simulationTime = 0.04;
+            }
+
+            var showPower = false;
+            if (Processing.data.showPower != undefined) {
+                showPower = Processing.data.showPower;
+            }
+
+            Processing.data = {
+                SEQ : {
+                    POS : 1,
+                    NEG : 2,
+                    ZERO : 0
+                },
+                SCROLL_PERCENT: 5.0,
+                change: true,
+                sourceImpedance: 0.10,
+                simulationTime: simulationTime,
+                harmonicIndex: 0,
+                highlighted: -1,
+                showPower: showPower,
+                phases: phases,
+                zType: 0,
+                seqElements : null,
+                harmonics : {}
+            };
+
+            // remove existing harmonic panels
+            $('.harmonic').remove();
+
+            if (initialData) {
+                var dataCopy = jQuery.extend(true, {}, initialData);
+                for (h in dataCopy) {
+                    // console.log(h, initialData[h])
+                    addHarmonic(dataCopy[h]);
+                }
+            }
+            else {
+                // default load current
+                addHarmonic({
+                    freq: 50.0,
+                    mag : 0.5,
+                    phase: 0.0,
+                    sequence: Processing.data.SEQ.POS,
+                    interharmonic: false
+                });
+            }
+
+            for (h in Processing.data.harmonics) {
+                addHarmonicPanel(h, allowEditing);
+                $("#harmonic-" + h).slideDown("100");
+            }
+        }
+
+        function reset(initialData, phases, simulationTime, allowEditing) {
+            if (allowEditing == undefined) {
+                allowEditing = true;
+            }
+            resetData(initialData, phases, simulationTime, allowEditing);
+            setAllSliders();
+            // updateLabels();
+        }
+        </script>
+        <script src="harmonic.data.js" type="text/javascript"></script>
+        <style>
+            body {
+                 background-color: #000000;
+                 font-family: sans-serif;
+                 margin-top: 130px;
+            }
+            div {
+                color: #FFFFFF;
+                font-size: 0.75em;
+                clear: left;
+            }
+            div.controls {
+                /*width: 800px;*/
+            }
+            div.controls span {
+                display: table-cell;
+                vertical-align: bottom;
+            }
+            div.controls span.horizontal {
+                width: 130px;
+                float: left;
+                margin: 10px;
+            }
+            div.controls span.vertical {
+                height: 75px;
+                float: left;
+                margin: 8px;
+            }
+            td {
+                vertical-align: top;
+            }
+
+            a {
+                font-weight:bold;
+                color:#0699C4;
+                text-decoration: none;
+            }
+            a:hover, a:active {
+                color:#003652;
+            }
+
+            b {
+                font-style: bold;
+            }
+
+            #pqCanvas {
+                position: absolute;
+                left: 0px;
+                top: 0px;
+                z-index: -25;
+            }
+
+            .label {
+                font-size: 1.6em;
+                text-align: left;
+                font-family: Helvetica;
+                /*font-weight: bold;*/
+                /*margin-left: 5px;*/
+                margin-bottom: 3px;
+            }
+
+            .posColour, #pos-mag .ui-slider-range, #pos-phase .ui-slider-range { background: #E26366; }
+            .negColour, #neg-mag .ui-slider-range, #neg-phase .ui-slider-range { background: #E26396; }
+            .zeroColour, #zero-mag .ui-slider-range, #zero-phase .ui-slider-range { background: #E2E2E2; }
+
+            .toolbar {
+                padding: 5px;
+                margin-left: 10px;
+                margin-bottom: 10px;
+                width: 250px;
+            }
+            .toolbar button {
+                margin: 2px;
+                font-size: 1.0em;
+            }
+            .harmonic {
+                display: none;
+            }
+            .harmonic .ui-slider, .harmonic .ui-buttonset, .harmonic .remove-harmonic-button, .mag-phase-label {
+                display: none;
+            }
+            span.harmonic-number-label-left {
+                width: 120px;
+            }
+
+            #no-of-phases, #z-type, #show-power-span {
+                padding-left: 2px;
+                padding-right: 8px;
+            }
+
+            .harmonic-mag-bar {
+                height: 2px;
+                width: 100%;
+                /*background: #FFFFFF;*/
+            }
+
+            #reset-button {
+                top: 0px;
+            }
+            #info-button {
+                /*margin-top: 12px;
+                top: 8px;*/
+            }
+
+            #info {
+                position: absolute;
+                display: none;
+                width: 500px;
+                z-index: 25;
+            }
+            #info p {font-size: 1.0em; margin: 0.5em;}
+            #info h3 {font-size: 1.1em; margin: 0; padding: 0.4em; text-align: center;}
+
+            div.spacer {padding: 0px;}
+        </style>
+    </head>
+    <body>
+        <div style="position:fixed;left:0;top:0;width:100%;height:100%;opacity:0;z-index:-1"></div>
+        <div class="toolbar ui-widget-content ui-corner-all">
+            <div class="controls" id="general-control" title="">
+                <span id="no-of-phases" title="show three-phase or single-phase waveforms">
+                    <input type="radio" id="three-phase" name="no-of-phases-radio" checked="checked" /><label for="three-phase" title="">three-phase</label>
+                    <input type="radio" id="single-phase" name="no-of-phases-radio" /><label for="single-phase" title="">single-phase</label>
+                </span><br />
+                <span id="z-type" title="select source impedance type: resistive (R) or reactive (X)">
+                    <input type="radio" id="z-type-r" name="z-type-radio" checked="checked" /><label for="z-type-r" title="">R</label>
+                    <input type="radio" id="z-type-x" name="z-type-radio" /><label for="z-type-x" title="">X</label>
+                </span>
+                <span id="show-power-span" title="show or hide load power">
+                    <input type="checkbox" id="show-power" name="show-power-checkbox" /><label for="show-power" title="">show power</label>
+                </span>
+                <br />
+                <button id="add-harmonic-button" title="add a harmonic">add harmonic</button>
+                <button id="add-interharmonic-button" title="add an interharmonic">add interharmonic</button>
+                <br /><br />
+                <button id="six-pulse-button" title="mimic the harmonics from a 6-pulse converter">6-pulse converter</button>
+                <button id="twelve-pulse-button" title="mimic the harmonics from a 12-pulse converter">12-pulse converter</button>
+                <button id="twentyfour-pulse-button" title="mimic the harmonics from a 24-pulse converter">24-pulse converter</button>
+                <button id="variable-speed-drive" title="mimic the harmonics from a variable-speed drive (at 100% load)">variable-speed drive</button>
+                <button id="TCR-button" title="mimic the harmonics from a thyristor-controlled reactor">TCR</button>
+                <button id="cfl-button" title="mimic the harmonics from a compact fluorescent lamp">CFL</button>
+                <button id="led-button" title="mimic the harmonics from a 7W LED">LED</button>
+                <button id="dc-supply-button" title="mimic the harmonics from a 520W DC supply">DC supply</button>
+                <button id="arc-furnace-button" title="mimic the harmonics from an arc furnace, including all interharmonics (slow!)">arc furnace</button>
+                <button id="apartment-button" title="mimic the harmonics from an apartment building">apartment</button>
+                <button id="switched-mode-button">switched-mode power supply</button>
+                <button id="PWM-drive-button" title="mimic the harmonics from a pulse width modulated drive">PWM drive</button>
+
+                <button id="low-pf-lighting" title="mimic the harmonics from low power factor lighting">low PF lighting</button>
+                <button id="ev-chargers" title="mimic the harmonics from electric vehicle chargers">EV chargers</button>
+                <button id="modern-entertainment" title="mimic the harmonics from 'modern entertainment'">modern entertainment</button>
+                <button id="hvac" title="mimic the harmonics from electronically commutated motor (ECM)-based heating, ventilation, and air conditioner (HVAC)">HVAC</button>
+
+                <button id="square-button">square wave</button>
+                <button id="sawtooth-button">sawtooth wave</button>
+                <br /><br />
+                <button id="reset-button" title="reset to default values">reset</button>
+                <button id="info-button" title="info">info</button>
+                <br /><br />
+                <div class="label" id="simulation-time-label"></div>
+                <div class="horizontal" id="simulation-time"></div><br />
+                <div class="label" id="source-impedance-label"></div>
+                <div class="horizontal" id="source-impedance"></div>
+            </div>
+        </div>
+        <div id="info" class="ui-widget-content ui-corner-all">
+            <h3 class="ui-widget-header ui-corner-all">Info - Visualisation of voltage harmonics</h3>
+            <p>
+                This tool plots the voltage resulting from a load which draws any specified current waveform. The harmonic (and interharmonic) content of the current drawn by the load can be controlled, or some typical loads can be selected.
+            </p>
+            <p>
+                Hover the mouse over individual harmonics to edit the frequency, magnitude, phase, and sequence. The plots will change to show the effect of only the highlighted harmonic. Double-click to remove any harmonic. The total harmonic distortion (THD) is shown for the phase A waveforms; this value is only valid without interharmonics.
+            </p>
+            <p>
+                The source supplies 1 pu positive sequence voltage. The voltage and current values are meant to be indicative, rather than absolute. The source impedance is modelled as a resistor, to simplify the equations; this will tend to underestimate the effect of harmonics on the system voltage, compared to an inductive impedance. The effect of a reactive impedance can be emulated by selecting 'X' instead of 'R'.
+            </p>
+            <p>
+                Some data are taken from the <a href="http://resource.npl.co.uk/waveform/">NPL Power Quality Waveform Library</a>.
+            </p>
+            <p>
+                This uses <a href="http://processingjs.org/">processing.js</a>, and requires an HTML5 browser.<!--  The source code is <a href="https://github.com/stevenblair/pq">here</a>. -->
+            </p>
+            <p>
+                Return to <a href="http://personal.strath.ac.uk/steven.m.blair">main page</a>.
+            </p>
+        </div>
+
+        <canvas id="pqCanvas" datasrc="pq.pde" width="900" height="700"></canvas>
+    </body>
+</html>
